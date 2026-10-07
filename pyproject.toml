@@ -1,0 +1,63 @@
+# Workspace root. It holds the dev tools and links the `backend` package.
+[project]
+name = "memory-db"
+version = "0.0.0"
+description = "Workspace root for the Agent Memory Platform (dev tools only)."
+requires-python = ">=3.13"
+dependencies = ["memory-platform"]
+
+[tool.uv.workspace]
+members = ["backend"]
+
+[tool.uv.sources]
+memory-platform = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest",
+    "httpx",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["backend/src", "tests"]
+# Ruff 0.16 also formats Python code blocks inside Markdown files. Docs (such as the
+# contract) must never be rewritten by a tool, so exclude them, even if named explicitly.
+extend-exclude = ["*.md", "docs"]
+force-exclude = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI uses calls like Depends() in default values on purpose. Tell B008 that is fine.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Header",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Security",
+]
+
+[tool.mypy]
+files = ["backend/src"]
+strict = true
+plugins = ["pydantic.mypy"]
+python_version = "3.13"
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    # Starlette's TestClient now prefers `httpx2`. We use `httpx` (the agreed dev tool) for now.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]

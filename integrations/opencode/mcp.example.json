@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "shared-memory": {
+      "type": "local",
+      "command": ["uv", "run", "--project", "/absolute/path/to/memory_db", "memory-mcp"],
+      "environment": {
+        "MEMORY_API_URL": "http://127.0.0.1:8000",
+        "MEMORY_API_TOKEN": "use-a-project-scoped-credential-not-the-owner-token",
+        "MEMORY_SCOPE_ID": "project-scope-id"
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "shared-memory": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--project", "/absolute/path/to/memory_db", "memory-mcp"]
+    }
+  }
+}

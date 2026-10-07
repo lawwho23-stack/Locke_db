@@ -1,0 +1,6 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "MEMORY_CLIENT_NAME=opencode uv run --project /absolute/path/to/memory_db python -m memory_platform.hooks", "timeout": 15}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "MEMORY_CLIENT_NAME=opencode uv run --project /absolute/path/to/memory_db python -m memory_platform.hooks", "timeout": 15}]}]
+  }
+}

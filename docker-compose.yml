@@ -1,0 +1,20 @@
+# Disposable Postgres (with pgvector) for tests, on port 5433.
+# Port 5433 keeps it away from the Homebrew Postgres on 5432.
+# Data lives in memory (tmpfs): when the container stops, everything is gone. That is fine for tests.
+services:
+  testdb:
+    image: pgvector/pgvector:pg18
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_PASSWORD: postgres
+    # Many parallel test sessions open many connections.
+    command: postgres -c max_connections=300
+    # The Postgres 18 image keeps its data under /var/lib/postgresql/18/docker.
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
