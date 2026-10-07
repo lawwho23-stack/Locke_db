@@ -31,8 +31,19 @@ export default function Graph({ scope, inspect }: { scope: string; inspect: (rec
     try {
       const data = await request(`graph?${params}`, "GET", undefined, current.signal);
       if (current.signal.aborted) return;
-      setNodes(data.nodes.map((record: RecordNode, index: number) => ({ id: record.id, data: { label: `${record.kind}: ${record.label}`, record }, position: { x: index % 4 * 270, y: Math.floor(index / 4) * 140 }, style: { width: 230, fontSize: 12, background: record.kind === "scope" ? "#faf1e4" : "#f3f8fb", borderColor: record.kind === "scope" ? "#9e7540" : "#4388a4" } })));
-      setEdges(data.edges.map((edge: Relation) => ({ id: edge.id, source: edge.from_id, target: edge.to_id, label: `${edge.type} (${edge.origin})`, data: edge, style: { stroke: edge.origin === "suggested" ? "#ad8949" : "#4b788e", strokeDasharray: edge.origin === "suggested" ? "5 4" : undefined } })));
+      setNodes(data.nodes.map((record: RecordNode, index: number) => {
+        const palette: Record<string, { background: string; border: string; color: string }> = {
+          scope: { background: "#241d0e", border: "#e8c07a", color: "#e8c07a" },
+          memory: { background: "#14202f", border: "#5b9cf6", color: "#dbe7fb" },
+          source: { background: "#10241d", border: "#34d399", color: "#d3f2e4" },
+          task: { background: "#1d1530", border: "#a78bfa", color: "#e4dcfb" },
+          session: { background: "#0f2a2e", border: "#38bdf8", color: "#d2eefb" },
+        };
+        const colors = palette[record.kind] ?? palette.memory;
+        const highlighted = record.id === focus || record.id === selected?.id;
+        return { id: record.id, data: { label: `${record.kind}: ${record.label}`, record }, position: { x: index % 4 * 270, y: Math.floor(index / 4) * 140 }, style: { width: 230, fontSize: 12, background: colors.background, borderColor: highlighted ? "#e8c07a" : colors.border, borderWidth: highlighted ? 2 : 1, borderRadius: 10, color: colors.color, boxShadow: highlighted ? "0 0 0 2px #e8c07a66, 0 0 24px #e8c07a33" : undefined } };
+      }));
+      setEdges(data.edges.map((edge: Relation) => ({ id: edge.id, source: edge.from_id, target: edge.to_id, label: `${edge.type} (${edge.origin})`, data: edge, style: { stroke: edge.origin === "suggested" ? "#e8c07a" : "#5b9cf6", strokeDasharray: edge.origin === "suggested" ? "5 4" : undefined, strokeWidth: 1.5 } })));
       setCursor(data.next_cursor); setTruncated(data.truncated);
     } catch (failure) { if (!current.signal.aborted) setError(message(failure)); }
     finally { if (!current.signal.aborted) setBusy(false); }
