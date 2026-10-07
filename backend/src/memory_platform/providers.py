@@ -75,6 +75,8 @@ class APIProvider:
                 )
         secret = getattr(settings, "provider_api_key", None)
         self.key = secret.get_secret_value() if secret else ""
+        self.referer = str(getattr(settings, "provider_referer", "") or "")
+        self.title = str(getattr(settings, "provider_title", "") or "")
         self.model = str(getattr(settings, "embedding_model", "") or "")
         self.dimensions = int(getattr(settings, "embedding_dimensions", 0) or 0)
         self.extraction_model = str(getattr(settings, "extraction_model", "") or "")
@@ -168,10 +170,14 @@ class APIProvider:
 
     def _request(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
+            headers = {"Authorization": "Bearer " + self.key}
+            # Optional OpenRouter attribution headers; omitted when unset.
+            if self.referer:
+                headers["HTTP-Referer"] = self.referer
+            if self.title:
+                headers["X-Title"] = self.title
             with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
-                response = client.post(
-                    self.endpoint + path, headers={"Authorization": "Bearer " + self.key}, json=body
-                )
+                response = client.post(self.endpoint + path, headers=headers, json=body)
                 response.raise_for_status()
                 value = response.json()
             if not isinstance(value, dict):

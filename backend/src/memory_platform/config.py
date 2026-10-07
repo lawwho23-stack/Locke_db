@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     provider_daily_budget_usd: float = Field(default=0, ge=0, allow_inf_nan=False)
     embedding_usd_per_million_tokens: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     extraction_usd_per_million_tokens: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    provider_referer: str | None = None
+    provider_title: str | None = None
     redis_rest_url: str | None = None
     redis_rest_token: SecretStr | None = None
     cache_ttl_seconds: int = Field(default=180, ge=1, le=300)
