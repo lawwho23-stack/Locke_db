@@ -26,3 +26,13 @@ test("credential and relation operations have exact methods and paths", () => {
   assert.equal(allowedPath("graph", "GET"), true);
   assert.equal(allowedPath("usage", "GET"), true);
 });
+
+test("hosted uploads and processing allow only the intended interfaces", () => {
+  const id = "12345678-1234-1234-1234-123456789012";
+  assert.equal(allowedPath("uploads", "POST"), true);
+  assert.equal(allowedPath(`uploads/${id}`, "GET"), true);
+  assert.equal(allowedPath(`uploads/${id}/finalize`, "POST"), true);
+  assert.equal(allowedPath("jobs/process", "POST"), true);
+  assert.equal(allowedPath("internal/cron", "GET"), false);
+  assert.equal(allowedPath(`uploads/${id}`, "DELETE"), false);
+});

@@ -1,6 +1,37 @@
 {
   "hooks": {
-    "SessionStart": [{"hooks": [{"type": "command", "command": "MEMORY_CLIENT_NAME=claude uv run --project /absolute/path/to/memory_db python -m memory_platform.hooks", "timeout": 15}]}],
-    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "MEMORY_CLIENT_NAME=claude uv run --project /absolute/path/to/memory_db python -m memory_platform.hooks", "timeout": 15}]}]
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/memory_db/.venv/bin/python -m memory_platform.hooks event --client claude",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/memory_db/.venv/bin/python -m memory_platform.hooks event --client claude",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/memory_db/.venv/bin/python -m memory_platform.hooks event --client claude",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
   }
 }

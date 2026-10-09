@@ -189,6 +189,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             elif args.command in ("backup-export", "backup-restore"):
                 from memory_platform.backup import export_backup, restore_backup
+                from memory_platform.storage import configured_storage
 
                 storage_dir = Path(args.storage_dir) if args.storage_dir else settings.storage_dir
                 if args.command == "backup-export":
@@ -197,6 +198,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         storage_dir,
                         args.output,
                         settings.memory_hmac_key.get_secret_value(),
+                        storage=(
+                            None
+                            if args.storage_dir or settings.storage_provider == "local"
+                            else configured_storage(settings)
+                        ),
                     )
                     tables = sum(summary["tables"].values())
                     output = (

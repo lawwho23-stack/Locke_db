@@ -95,11 +95,17 @@ def get_principal(
     authorization: Annotated[str | None, Header()] = None,
 ) -> Principal:
     """Authenticate in a short read transaction and expose the caller to error logging."""
-    match = re.fullmatch(r"(?i:Bearer) (mem_[A-Za-z0-9_-]+)", authorization or "")
+    match = re.fullmatch(r"(?i:Bearer) ((?:mem_|mcp_at_)[A-Za-z0-9_-]+)", authorization or "")
     if match is None:
         raise AppError(ErrorCode.unauthenticated, "Invalid credentials.")
+    token = match.group(1)
     with get_engine_dep(request).begin() as conn:
-        principal = resolve_principal(conn, match.group(1))
+        if token.startswith("mcp_at_"):
+            from memory_platform.services.oauth import resolve_oauth_principal
+
+            principal = resolve_oauth_principal(conn, token)
+        else:
+            principal = resolve_principal(conn, token)
     request.state.principal = principal
     enforce_rate_limit(request, principal)
     return principal

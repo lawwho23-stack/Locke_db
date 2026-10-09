@@ -41,7 +41,8 @@ def wait_ready(url, process):
     not shutil.which("node") or not (WEB / ".next" / "BUILD_ID").exists(),
     reason="Run npm install && npm run build in apps/web before web acceptance.",
 )
-def test_real_owner_cookie_and_proxy(test_db_url, workspace, make_agent_client):
+def test_real_owner_cookie_and_proxy(test_db_url, workspace, make_agent_client, make_scope):
+    other_scope = make_scope("project", "zz-onboarding-scope")
     api_port, web_port = free_port(), free_port()
     api_url, web_url = f"http://127.0.0.1:{api_port}", f"http://127.0.0.1:{web_port}"
     env = {
@@ -178,7 +179,13 @@ def test_real_owner_cookie_and_proxy(test_db_url, workspace, make_agent_client):
                     == 201
                 )
             artifacts = Path(tempfile.mkdtemp(prefix="memory-v1-browser-evidence-"))
-            browser_acceptance(web_url, workspace.owner_token, artifacts)
+            browser_acceptance(
+                web_url,
+                workspace.owner_token,
+                artifacts,
+                str(workspace.personal_scope_id),
+                str(other_scope),
+            )
             print(f"Browser evidence: {artifacts}")
     finally:
         for process in reversed(processes):
@@ -190,7 +197,7 @@ def test_real_owner_cookie_and_proxy(test_db_url, workspace, make_agent_client):
                 process.wait(timeout=5)
 
 
-def browser_acceptance(web_url, owner_token, artifacts):
+def browser_acceptance(web_url, owner_token, artifacts, personal_scope, other_scope):
     """Exercise real Chrome through its DevTools protocol without new dependencies."""
     import base64
     import json
@@ -266,7 +273,11 @@ def browser_acceptance(web_url, owner_token, artifacts):
                 def click(label):
                     return evaluate(
                         "Array.from(document.querySelectorAll('button'))"
-                        ".find(b => b.textContent === " + json.dumps(label) + ")?.click()"
+                        ".find(b => b.getAttribute('aria-label') === "
+                        + json.dumps(label)
+                        + " || b.textContent.trim() === "
+                        + json.dumps(label)
+                        + ")?.click()"
                     )
 
                 def fill(selector, value):
@@ -287,6 +298,8 @@ def browser_acceptance(web_url, owner_token, artifacts):
                 )
                 command("Page.navigate", {"url": web_url})
                 wait("document.querySelector('input[type=password]') !== null")
+                screenshot = command("Page.captureScreenshot", {"format": "png"})["data"]
+                (artifacts / "login-desktop.png").write_bytes(base64.b64decode(screenshot))
                 fill("input[type=password]", owner_token)
                 click("Open workspace")
                 wait("document.querySelector('.tabs') !== null")
@@ -297,6 +310,25 @@ def browser_acceptance(web_url, owner_token, artifacts):
                 assert "Browser unrelated note" not in evaluate("document.body.innerText")
                 fill('input[placeholder="Find stored knowledge"]', "")
                 wait("document.querySelectorAll('.row').length === 3")
+                evaluate("document.querySelector('.rows .row').click()")
+                wait("document.querySelector('.detail textarea') !== null")
+                click("Forget")
+                wait("document.querySelector('dialog').open")
+                click("Cancel")
+                assert evaluate("document.querySelectorAll('.rows .row').length") == 3
+                click("Close inspector")
+                assert evaluate("document.querySelector('.detail-open') === null")
+                screenshot = command("Page.captureScreenshot", {"format": "png"})["data"]
+                (artifacts / "memories-desktop.png").write_bytes(base64.b64decode(screenshot))
+                for section in ("Tasks", "Approved skills", "Activity"):
+                    click(section)
+                    wait("document.querySelector('h1')?.textContent === " + json.dumps(section))
+                    wait("document.querySelector('.loading') === null")
+                    assert not evaluate("document.querySelector('[role=alert]')?.textContent")
+                    screenshot = command("Page.captureScreenshot", {"format": "png"})["data"]
+                    (artifacts / f"{section.lower().replace(' ', '-')}-desktop.png").write_bytes(
+                        base64.b64decode(screenshot)
+                    )
                 click("Graph")
                 wait("document.querySelector('.react-flow__minimap') !== null")
                 wait("document.querySelectorAll('.react-flow__node').length >= 1")
@@ -312,17 +344,65 @@ def browser_acceptance(web_url, owner_token, artifacts):
                 )
                 screenshot = command("Page.captureScreenshot", {"format": "png"})["data"]
                 (artifacts / "dashboard-desktop.png").write_bytes(base64.b64decode(screenshot))
+                click("Close inspector")
                 click("Connections")
                 wait("document.querySelector('input[name=name]') !== null")
+                assert evaluate("document.querySelector('select').options.length") >= 1
+                assert (
+                    evaluate(
+                        "Array.from(document.querySelectorAll('.capabilities input:checked'))"
+                        ".map(i => i.parentElement.textContent.trim()).sort().join(',')"
+                    )
+                    == "memory:read,memory:write"
+                )
                 fill("input[name=name]", "Browser scoped agent")
                 click("Create scoped credential")
                 wait("document.querySelector('.token-reveal code') !== null")
+                assert "locke-db-api.vercel.app/mcp" in evaluate(
+                    "document.querySelector('.token-reveal').innerText"
+                )
+                assert "Starter prompt" in evaluate(
+                    "document.querySelector('.token-reveal').innerText"
+                )
+                assert evaluate(
+                    "Array.from(document.querySelectorAll('.token-reveal pre'))"
+                    ".every(p => !p.textContent.includes("
+                    "document.querySelector('.token-reveal > code').textContent))"
+                )
+                assert evaluate(
+                    "Object.keys(localStorage).length === 0 && "
+                    "Object.keys(sessionStorage).length === 0"
+                )
                 issued = evaluate("document.querySelector('.token-reveal code').textContent")
                 assert issued.startswith("mem_") and issued != owner_token
                 assert not evaluate("JSON.stringify(localStorage).includes('mem_')")
+                evaluate(
+                    "(() => { const input = "
+                    "document.querySelector('select[aria-label=\"Project scope\"]');"
+                    "Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value')"
+                    ".set.call(input," + json.dumps(other_scope) + ");"
+                    "input.dispatchEvent(new Event('change',{bubbles:true})); })()"
+                )
+                wait("document.querySelector('.token-reveal') === null")
+                assert issued not in evaluate("document.body.innerText")
+                wait("document.querySelector('input[name=name]') !== null")
+                fill("input[name=name]", "Browser second scoped agent")
+                wait(
+                    "Array.from(document.querySelectorAll('button'))"
+                    ".find(b => b.textContent === 'Create scoped credential')?.disabled === false"
+                )
+                click("Create scoped credential")
+                wait("document.querySelector('.token-reveal code') !== null")
                 click("I saved it · dismiss")
                 assert evaluate("document.querySelector('.token-reveal') === null")
                 assert issued not in evaluate("document.body.innerText")
+                evaluate(
+                    "(() => { const input = "
+                    "document.querySelector('select[aria-label=\"Project scope\"]');"
+                    "Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value')"
+                    ".set.call(input," + json.dumps(personal_scope) + ");"
+                    "input.dispatchEvent(new Event('change',{bubbles:true})); })()"
+                )
                 click("Usage")
                 wait("document.querySelector('.usage-table') !== null")
                 assert not evaluate("document.querySelector('[role=alert]')?.textContent")
@@ -348,15 +428,42 @@ def browser_acceptance(web_url, owner_token, artifacts):
                 click("Upload document")
                 wait("document.querySelectorAll('.rows .row').length === 1")
                 assert "queued" in evaluate("document.body.innerText")
+                click("Process pending jobs")
+                wait(
+                    "document.querySelector('.processing').innerText"
+                    ".includes('No jobs ready to run')"
+                )
+                wait("document.querySelector('.rows').innerText.includes('ready')")
+                assert not evaluate("document.querySelector('[role=alert]')?.textContent")
+                screenshot = command("Page.captureScreenshot", {"format": "png"})["data"]
+                (artifacts / "sources-desktop.png").write_bytes(base64.b64decode(screenshot))
                 command(
                     "Emulation.setDeviceMetricsOverride",
                     {"width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": True},
                 )
+                wait("document.querySelector('.sidebar').getBoundingClientRect().right <= 0")
+                wait("document.querySelector('.sidebar').inert")
                 screenshot = command("Page.captureScreenshot", {"format": "png"})["data"]
                 (artifacts / "dashboard-mobile.png").write_bytes(base64.b64decode(screenshot))
                 assert evaluate(
                     "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
                 ), "Mobile layout overflows."
+                click("Open navigation")
+                wait("document.querySelector('.navigation-open') !== null")
+                click("Tasks")
+                wait("document.querySelector('h1')?.textContent === 'Tasks'")
+                assert not evaluate("document.querySelector('.navigation-open')")
+                assert evaluate(
+                    "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+                )
+                command(
+                    "Emulation.setDeviceMetricsOverride",
+                    {"width": 320, "height": 844, "deviceScaleFactor": 1, "mobile": True},
+                )
+                assert evaluate(
+                    "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+                ), "320-pixel layout overflows."
+                click("Open navigation")
                 click("Sign out")
                 wait("document.querySelector('input[type=password]') !== null")
                 assert not exceptions, "Browser raised JavaScript exceptions."

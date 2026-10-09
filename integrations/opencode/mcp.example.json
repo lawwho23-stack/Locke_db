@@ -1,6 +1,12 @@
 {
+  "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "shared-memory": {
+    "locke": {
+      "type": "remote",
+      "url": "https://locke-db-api.vercel.app/mcp",
+      "oauth": true
+    },
+    "shared-memory-local": {
       "type": "local",
       "command": ["uv", "run", "--project", "/absolute/path/to/memory_db", "memory-mcp"],
       "environment": {

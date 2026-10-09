@@ -5,6 +5,8 @@ Secrets live only in `.env` (never committed). Real environment variables win ov
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
+from uuid import UUID
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,7 +14,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # backend/src/memory_platform/config.py -> parents[3] is the repo root.
 # We do not use the current directory, because tools run from different folders
 # (for example `cd backend` before running Alembic).
-REPO_ROOT = Path(__file__).resolve().parents[3]
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = BACKEND_ROOT.parent
 
 
 class Settings(BaseSettings):
@@ -25,6 +28,8 @@ class Settings(BaseSettings):
 
     # App connection (Neon pooled URL, restricted role).
     database_url: str
+    # Hosted MCP forwards to this API origin using the caller's scoped credential.
+    memory_api_url: str | None = None
     # Owner-role direct URL, used only for migrations and the admin CLI.
     migration_database_url: str | None = None
     # Local Docker server used by tests (the tests create random databases on it).
@@ -36,6 +41,11 @@ class Settings(BaseSettings):
     idempotency_ttl_hours: int = 24
     max_body_bytes: int = 65536
     storage_dir: Path = REPO_ROOT / ".data" / "sources"
+    storage_provider: Literal["local", "vercel_blob"] = "local"
+    blob_read_write_token: SecretStr | None = None
+    hosted_enrichment_batch_size: int = Field(default=0, ge=0, le=8)
+    cron_secret: SecretStr | None = None
+    cron_workspace_id: UUID | None = None
     provider_base_url: str | None = None
     provider_api_key: SecretStr | None = None
     embedding_model: str | None = None
@@ -60,6 +70,26 @@ class Settings(BaseSettings):
     # psycopg prepares a statement after this many uses. Set None to turn it off
     # if the Neon pooler rejects prepared statements.
     db_prepare_threshold: int | None = 5
+    # MCP OAuth bridge (owner-only, no public signup). Issuer defaults to the
+    # public API origin; override only when behind a custom domain.
+    oauth_issuer: str | None = None
+    # Browser-facing authorize page (dashboard). When set, discovery advertises
+    # this URL so coding tools open the dashboard login+consent screen, which
+    # then approves via the backend with the owner session.
+    oauth_authorize_url: str | None = None
+    # Single owner allowlist for social login. When set, the authorize step
+    # requires this email; otherwise any owner admin credential may approve.
+    owner_email: str | None = None
+    # Optional social login (Google/GitHub). Dashboard shows only configured buttons.
+    google_client_id: str | None = None
+    google_client_secret: SecretStr | None = None
+    github_client_id: str | None = None
+    github_client_secret: SecretStr | None = None
+    oauth_access_ttl_seconds: int = Field(default=3600, ge=300, le=86400)
+    oauth_refresh_ttl_days: int = Field(default=30, ge=1, le=90)
+    oauth_code_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    # Lifetime of the owner credential minted by a GitHub sign-in, in hours.
+    github_oauth_ttl_hours: int = Field(default=12, ge=1, le=72)
 
     @field_validator("memory_hmac_key")
     @classmethod

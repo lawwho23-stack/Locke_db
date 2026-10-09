@@ -9,7 +9,6 @@ import argparse
 import hashlib
 import time
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -38,7 +37,7 @@ from memory_platform.services.evidence import (
     validate_extraction,
 )
 from memory_platform.services.sources import chunk_pages, parse_document
-from memory_platform.storage import LocalStorage
+from memory_platform.storage import Storage, configured_storage
 from memory_platform.tables import memories, scopes, workspaces
 
 LEASE_SECONDS = 120
@@ -46,7 +45,11 @@ MAX_ATTEMPTS = 5
 
 
 def queue_missing_memory_embeddings(
-    engine: Engine, provider: KnowledgeProvider, limit: int = 100
+    engine: Engine,
+    provider: KnowledgeProvider,
+    limit: int = 100,
+    *,
+    workspace_id: UUID | None = None,
 ) -> int:
     """Lazy scanner avoids changing the Phase 1 transaction/idempotency contract."""
     now = datetime.now(UTC)
@@ -84,6 +87,7 @@ def queue_missing_memory_embeddings(
         rows = conn.execute(
             select(memories.c.id, memories.c.workspace_id, memories.c.version)
             .where(
+                *([memories.c.workspace_id == workspace_id] if workspace_id else []),
                 memories.c.state == "active",
                 or_(memories.c.valid_until.is_(None), memories.c.valid_until > now),
                 ~exists,
@@ -119,6 +123,7 @@ def claim_job(engine: Engine, workspace_id: UUID | None = None) -> dict[str, Any
             conn.execute(
                 update(knowledge_jobs)
                 .where(
+                    *([knowledge_jobs.c.workspace_id == workspace_id] if workspace_id else []),
                     knowledge_jobs.c.status == "leased",
                     knowledge_jobs.c.lease_until < now,
                     knowledge_jobs.c.attempts >= MAX_ATTEMPTS,
@@ -250,7 +255,7 @@ def _finish(conn: Any, job: dict[str, Any], status: str = "completed") -> None:
 
 
 def _process_source(
-    engine: Engine, job: dict[str, Any], storage: LocalStorage, provider: KnowledgeProvider | None
+    engine: Engine, job: dict[str, Any], storage: Storage, provider: KnowledgeProvider | None
 ) -> None:
     with engine.begin() as conn:
         row = _source_current(conn, job, lock=True)
@@ -305,7 +310,11 @@ def _process_source(
 
 
 def queue_missing_source_embeddings(
-    engine: Engine, provider: KnowledgeProvider, limit: int = 100
+    engine: Engine,
+    provider: KnowledgeProvider,
+    limit: int = 100,
+    *,
+    workspace_id: UUID | None = None,
 ) -> int:
     """Separate optional enrichment lets lexical documents remain usable during outages."""
     model_key = hashlib.sha256(
@@ -343,6 +352,7 @@ def queue_missing_source_embeddings(
                     source_versions.join(sources, source_versions.c.source_id == sources.c.id)
                 )
                 .where(
+                    *([sources.c.workspace_id == workspace_id] if workspace_id else []),
                     sources.c.deleted_at.is_(None),
                     sources.c.current_version == source_versions.c.version,
                     source_versions.c.status == "ready",
@@ -415,13 +425,22 @@ def _process_source_enrichment(
                 .order_by(source_chunks.c.ordinal)
             ).mappings()
         ]
-    for start in range(0, len(chunks), 8):
+    missing = [
+        chunk
+        for chunk in chunks
+        if chunk["embedding"] is None
+        or chunk["embedding_model"] != provider.model
+        or chunk["embedding_dimensions"] != provider.dimensions
+    ]
+    batch_limit = getattr(settings, "hosted_enrichment_batch_size", 0)
+    selected = missing[:batch_limit] if batch_limit else missing
+    for start in range(0, len(selected), 8):
         if not _renew(engine, job):
             return
         with engine.begin() as conn:
             if _source_current(conn, job) is None:
                 return
-        batch = chunks[start : start + 8]
+        batch = selected[start : start + 8]
         vectors = validate_vectors(
             provider.embed(row["workspace_id"], [part["content"] for part in batch]),
             len(batch),
@@ -433,6 +452,36 @@ def _process_source_enrichment(
                 embedding_model=provider.model,
                 embedding_dimensions=provider.dimensions,
             )
+        with engine.begin() as conn:
+            if _source_current(conn, job, lock=True) is None or not _leased(conn, job, lock=True):
+                return
+            for chunk in batch:
+                conn.execute(
+                    update(source_chunks)
+                    .where(source_chunks.c.id == chunk["id"])
+                    .values(
+                        embedding=chunk["embedding"],
+                        embedding_model=provider.model,
+                        embedding_dimensions=provider.dimensions,
+                    )
+                )
+    if batch_limit and len(missing) > len(selected):
+        with engine.begin() as conn:
+            if _source_current(conn, job, lock=True) is not None and _leased(conn, job, lock=True):
+                conn.execute(
+                    update(knowledge_jobs)
+                    .where(knowledge_jobs.c.id == job["id"])
+                    .values(
+                        status="queued",
+                        attempts=knowledge_jobs.c.attempts - 1,
+                        lease_token=None,
+                        lease_until=None,
+                        error_code=None,
+                        available_at=datetime.now(UTC),
+                        finished_at=None,
+                    )
+                )
+        return
     summary: str | None = None
     candidates: list[dict[str, Any]] = []
     if hmac_key and getattr(provider, "extraction_enabled", False):
@@ -462,16 +511,6 @@ def _process_source_enrichment(
                 candidates=candidates,
                 hmac_key=hmac_key,
                 settings=settings,
-            )
-        for chunk in chunks:
-            conn.execute(
-                update(source_chunks)
-                .where(source_chunks.c.id == chunk["id"])
-                .values(
-                    embedding=chunk["embedding"],
-                    embedding_model=provider.model,
-                    embedding_dimensions=provider.dimensions,
-                )
             )
         conn.execute(
             update(source_versions)
@@ -549,7 +588,7 @@ def _process_memory(
         _finish(conn, job)
 
 
-def _process_source_cleanup(engine: Engine, job: dict[str, Any], storage: LocalStorage) -> None:
+def _process_source_cleanup(engine: Engine, job: dict[str, Any], storage: Storage) -> None:
     with engine.begin() as conn:
         deleted = conn.execute(
             select(sources.c.id).where(
@@ -586,7 +625,7 @@ def _process_source_cleanup(engine: Engine, job: dict[str, Any], storage: LocalS
 def process_job(
     engine: Engine,
     job: dict[str, Any],
-    storage: LocalStorage,
+    storage: Storage,
     provider: KnowledgeProvider | None = None,
     *,
     hmac_key: bytes | None = None,
@@ -642,20 +681,21 @@ def run_once(
     settings: Settings,
     *,
     provider: KnowledgeProvider | None = None,
-    storage: LocalStorage | None = None,
+    storage: Storage | None = None,
+    workspace_id: UUID | None = None,
 ) -> bool:
     if provider is None:
         provider = configured_provider(engine, settings)
     if provider is not None:
-        queue_missing_memory_embeddings(engine, provider)
-        queue_missing_source_embeddings(engine, provider)
-    job = claim_job(engine)
+        queue_missing_memory_embeddings(engine, provider, workspace_id=workspace_id)
+        queue_missing_source_embeddings(engine, provider, workspace_id=workspace_id)
+    job = claim_job(engine, workspace_id)
     if job is None:
         return False
     process_job(
         engine,
         job,
-        storage or LocalStorage(getattr(settings, "storage_dir", Path(".data/sources"))),
+        storage or configured_storage(settings),
         provider,
         hmac_key=settings.hmac_key_bytes,
         settings=settings,

@@ -149,6 +149,20 @@ def revoke_credential(
             grant_revision=scopes.c.grant_revision + 1,
         )
     )
+    # Revoking the credential must also kill its OAuth device tokens. The OAuth
+    # tables live in their own module to avoid a service import cycle.
+    from memory_platform.oauth_tables import oauth_access_tokens, oauth_refresh_tokens
+
+    for table in (oauth_access_tokens, oauth_refresh_tokens):
+        conn.execute(
+            update(table)
+            .where(
+                table.c.workspace_id == principal.workspace_id,
+                table.c.credential_id == credential_id,
+                table.c.revoked_at.is_(None),
+            )
+            .values(revoked_at=func.now())
+        )
     record_activity(
         conn,
         workspace_id=principal.workspace_id,

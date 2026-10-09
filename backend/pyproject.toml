@@ -17,6 +17,7 @@ dependencies = [
     "python-docx",
     "mcp",
     "cryptography",
+    "vercel>=0.5.0",
 ]
 
 [project.scripts]

@@ -9,11 +9,28 @@ import hashlib
 import secrets
 
 TOKEN_PREFIX = "mem_"
+OAUTH_ACCESS_PREFIX = "mcp_at_"
+OAUTH_REFRESH_PREFIX = "mcp_rt_"
 
 
 def generate_token() -> str:
     """Create a new random token: "mem_" + 43 url-safe characters."""
     return TOKEN_PREFIX + secrets.token_urlsafe(32)
+
+
+def generate_oauth_access_token() -> str:
+    """Short-lived MCP access token shown once to the OAuth client."""
+    return OAUTH_ACCESS_PREFIX + secrets.token_urlsafe(32)
+
+
+def generate_oauth_refresh_token() -> str:
+    """Longer-lived refresh token; rotated on every use."""
+    return OAUTH_REFRESH_PREFIX + secrets.token_urlsafe(32)
+
+
+def generate_oauth_code() -> str:
+    """Single-use authorization code, PKCE-bound, ten minutes to live."""
+    return secrets.token_urlsafe(32)
 
 
 def hash_token(token: str) -> str:

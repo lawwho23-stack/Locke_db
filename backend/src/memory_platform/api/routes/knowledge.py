@@ -1,6 +1,5 @@
 """Document sources and authorised grounded recall."""
 
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -20,7 +19,7 @@ from memory_platform.knowledge_tables import source_versions, sources
 from memory_platform.providers import configured_provider
 from memory_platform.services.access import readable_scope_ids
 from memory_platform.services.sources import checked_source, delete_source, upload_source
-from memory_platform.storage import LocalStorage
+from memory_platform.storage import configured_storage
 
 router = APIRouter(prefix="/v1", tags=["knowledge"])
 
@@ -37,7 +36,7 @@ def create_source(
     req: SourceUploadRequest, principal: PrincipalDep, engine: EngineDep, settings: SettingsDep
 ) -> dict[str, Any]:
     principal.require(req.scope_id, Capability.source_ingest)
-    storage = LocalStorage(getattr(settings, "storage_dir", Path(".data/sources")))
+    storage = configured_storage(settings)
     return upload_source(
         engine,
         principal,
@@ -131,7 +130,7 @@ def replace_source(
     return upload_source(
         engine,
         principal,
-        LocalStorage(getattr(settings, "storage_dir", Path(".data/sources"))),
+        configured_storage(settings),
         scope_id=row["scope_id"],
         title=row["title"],
         filename=req.filename,
@@ -149,6 +148,6 @@ def remove_source(
     return delete_source(
         engine,
         principal,
-        LocalStorage(getattr(settings, "storage_dir", Path(".data/sources"))),
+        configured_storage(settings),
         source_id,
     )
