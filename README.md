@@ -160,9 +160,12 @@ sessions and handoffs. The optional HTTP bridge is
 and verifies it before any protocol handling. Local HTTP transport acceptance with
 caller-specific authorization is tested; installed-client acceptance is still pending.
 
-Hooks read authored checkpoints at lifecycle boundaries and register/heartbeat a session
-when an external session ID is supplied. They do not capture prompts or transcripts, execute
-checkpoint text, automatically publish progress, or complete tasks when a turn ends.
+Claude Code and Codex can load project checkpoints and relevant memories automatically,
+and prompt the agent to publish concise progress before finishing a turn. Install native
+user hooks and explicitly map project scopes using [automatic memory hooks](docs/automatic-memory-hooks.md).
+The private publishing journal preserves retry identities and ownership/version checks.
+Hooks never capture full prompts/transcripts or mark tasks completed just because a turn ends.
+The older environment-only hook invocation remains a read-only checkpoint integration.
 
 Write flow: register session → create task → publish checkpoint → offer/accept handoff.
 Task writes require a stable `event_id`, increasing session `sequence`, `expected_version`

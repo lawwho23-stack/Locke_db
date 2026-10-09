@@ -9,9 +9,14 @@ from sqlalchemy import func, select
 from memory_platform.api.deps import EngineDep, PrincipalDep, SettingsDep
 from memory_platform.enums import ActorKind, Capability
 from memory_platform.errors import AppError, ErrorCode
-from memory_platform.knowledge_tables import knowledge_jobs, provider_usage, sources
+from memory_platform.knowledge_tables import (
+    knowledge_jobs,
+    provider_usage,
+    source_versions,
+    sources,
+)
 from memory_platform.services.quotas import usage_snapshot
-from memory_platform.tables import memories
+from memory_platform.tables import memories, scopes
 
 router = APIRouter(prefix="/v1", tags=["operations"])
 
@@ -78,13 +83,23 @@ def job(job_id: UUID, principal: PrincipalDep, engine: EngineDep) -> dict[str, A
         )
         if row is None:
             raise AppError(ErrorCode.not_found, "Not found.")
-        table = memories if row["kind"] == "memory_embedding" else sources
-        scope_id = conn.execute(
-            select(table.c.scope_id).where(
-                table.c.id == row["target_id"],
-                table.c.workspace_id == principal.workspace_id,
+        if row["kind"] in {"source", "source_enrichment"}:
+            query = (
+                select(sources.c.scope_id)
+                .join(source_versions, source_versions.c.source_id == sources.c.id)
+                .where(
+                    source_versions.c.id == row["target_id"],
+                    source_versions.c.workspace_id == principal.workspace_id,
+                    sources.c.workspace_id == principal.workspace_id,
+                    sources.c.deleted_at.is_(None),
+                )
             )
-        ).scalar_one_or_none()
+        else:
+            table = memories if row["kind"] == "memory_embedding" else sources
+            query = select(table.c.scope_id).where(
+                table.c.id == row["target_id"], table.c.workspace_id == principal.workspace_id
+            )
+        scope_id = conn.execute(query).scalar_one_or_none()
         if scope_id is None:
             raise AppError(ErrorCode.not_found, "Not found.")
         principal.require(scope_id, Capability.memory_read)
@@ -102,3 +117,28 @@ def job(job_id: UUID, principal: PrincipalDep, engine: EngineDep) -> dict[str, A
             "finished_at",
         )
         return {field: row[field] for field in fields}
+
+
+@router.post("/jobs/process")
+def process_jobs(
+    principal: PrincipalDep, engine: EngineDep, settings: SettingsDep
+) -> dict[str, Any]:
+    if principal.actor_kind != ActorKind.owner or not principal.is_admin:
+        raise AppError(ErrorCode.forbidden, "Owner administration required.")
+    with engine.begin() as conn:
+        workspace_scopes = (
+            conn.execute(select(scopes.c.id).where(scopes.c.workspace_id == principal.workspace_id))
+            .scalars()
+            .all()
+        )
+        # Processing may mutate any queue target. A narrowed owner token cannot run it.
+        for scope_id in workspace_scopes:
+            for capability in (
+                Capability.source_ingest,
+                Capability.memory_write,
+                Capability.memory_delete,
+            ):
+                principal.require(scope_id, capability)
+    from memory_platform.services.hosted_processing import process_pending
+
+    return process_pending(engine, settings, principal.workspace_id)

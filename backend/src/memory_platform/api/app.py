@@ -14,6 +14,7 @@ from sqlalchemy import Engine
 from sqlalchemy.exc import OperationalError, TimeoutError
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.exceptions import HTTPException
+from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from memory_platform.api.routes import credentials, memories, scopes
@@ -114,11 +115,17 @@ class RequestBoundary:
                 # Authenticate before reading a potentially large package. No uploaded
                 # skill bytes are ever buffered from an agent credential.
                 authorization = Headers(scope=scope).get("authorization", "")
-                match = re.fullmatch(r"(?i:Bearer) (mem_[A-Za-z0-9_-]+)", authorization)
+                match = re.fullmatch(r"(?i:Bearer) ((?:mem_|mcp_at_)[A-Za-z0-9_-]+)", authorization)
                 if match is None:
                     raise AppError(ErrorCode.unauthenticated, "Invalid credentials.")
                 with self.engine.begin() as conn:
-                    principal = resolve_principal(conn, match.group(1))
+                    token = match.group(1)
+                    if token.startswith("mcp_at_"):
+                        from memory_platform.services.oauth import resolve_oauth_principal
+
+                        principal = resolve_oauth_principal(conn, token)
+                    else:
+                        principal = resolve_principal(conn, token)
                 request.state.principal = principal
                 if path == "/v1/skills":
                     if principal.actor_kind != ActorKind.owner or not principal.is_admin:
@@ -239,9 +246,9 @@ def create_app(*, settings: Settings, engine: Engine) -> FastAPI:
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
-        from memory_platform.config import REPO_ROOT
+        from memory_platform.config import BACKEND_ROOT
 
-        cfg = Config(str(REPO_ROOT / "backend" / "alembic.ini"))
+        cfg = Config(str(BACKEND_ROOT / "alembic.ini"))
         head = ScriptDirectory.from_config(cfg).get_current_head()
         counts = {row["status"]: row["count"] for row in rows}
         pending = sum(counts.get(status, 0) for status in ("queued", "leased", "retry_wait"))
@@ -260,12 +267,15 @@ def create_app(*, settings: Settings, engine: Engine) -> FastAPI:
     app.include_router(credentials.router)
     from memory_platform.api.routes import (
         capture,
+        cron,
         dashboard,
         graph,
         knowledge,
+        oauth,
         operations,
         skills,
         tasks,
+        uploads,
     )
 
     app.include_router(skills.router)
@@ -275,6 +285,9 @@ def create_app(*, settings: Settings, engine: Engine) -> FastAPI:
     app.include_router(capture.router)
     app.include_router(graph.router)
     app.include_router(operations.router)
+    app.include_router(uploads.router)
+    app.include_router(cron.router)
+    app.include_router(oauth.router)
     return app
 
 
@@ -283,11 +296,19 @@ def create_default_app() -> FastAPI:
     settings = get_settings()
     engine = make_engine(settings.database_url, prepare_threshold=settings.db_prepare_threshold)
     app = create_app(settings=settings, engine=engine)
+    from memory_platform.mcp_server import create_http_app
+
+    # The server factory owns protocol lifecycle. The injected REST factory remains
+    # reusable by concurrent clients; the SDK session manager may only start once.
+    mcp = create_http_app(api_url=settings.memory_api_url)
+    app.router.routes.append(Route("/mcp", endpoint=mcp))
+    rest_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         try:
-            yield
+            async with rest_lifespan(app), mcp.app.router.lifespan_context(mcp.app):
+                yield
         finally:
             engine.dispose()
 

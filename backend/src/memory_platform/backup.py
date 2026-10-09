@@ -30,10 +30,10 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import Connection, Engine
 from sqlalchemy.dialects.postgresql import ARRAY
 
-from memory_platform.config import REPO_ROOT
+from memory_platform.config import BACKEND_ROOT
 from memory_platform.schema import metadata
 from memory_platform.skill_package import package_hash
-from memory_platform.storage import LocalStorage
+from memory_platform.storage import LocalStorage, Storage
 
 MAGIC = b"MEMORYDB-BACKUP-1\x00"
 MAX_BACKUP_BYTES = 256 * 1024 * 1024
@@ -42,7 +42,7 @@ LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 def _config(engine: Engine) -> Config:
-    cfg = Config(str(REPO_ROOT / "backend" / "alembic.ini"))
+    cfg = Config(str(BACKEND_ROOT / "alembic.ini"))
     cfg.attributes["url"] = engine.url.render_as_string(hide_password=False)
     return cfg
 
@@ -169,12 +169,17 @@ def _write_artifact(output: Path, content: bytes) -> None:
 
 
 def export_backup(
-    engine: Engine, storage_directory: Path, output: Path, hmac_key_hex: str
+    engine: Engine,
+    storage_directory: Path,
+    output: Path,
+    hmac_key_hex: str,
+    *,
+    storage: Storage | None = None,
 ) -> dict[str, Any]:
     """Encrypt a repeatable-read snapshot of every application table and originals."""
     if len(hmac_key_hex) != 64 or len(bytes.fromhex(hmac_key_hex)) != 32:
         raise ValueError("Invalid HMAC key.")
-    directory = _safe_directory(storage_directory)
+    directory = _safe_directory(storage_directory) if storage is None else None
     tables: dict[str, Any] = {}
     with (
         engine.connect().execution_options(isolation_level="REPEATABLE READ") as conn,
@@ -197,7 +202,11 @@ def export_backup(
             if str(UUID(key)) != key:
                 raise ValueError("Unsafe storage key.")
             try:
-                content = _read_file(directory / key, 20 * 1024 * 1024)
+                content = (
+                    storage.get(key)
+                    if storage is not None
+                    else _read_file(directory / key, 20 * 1024 * 1024)
+                )
             except FileNotFoundError:
                 if row["source_id"] not in deleted:
                     raise ValueError("A live source original is missing.") from None

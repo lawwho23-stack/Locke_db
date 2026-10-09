@@ -5,6 +5,7 @@ import binascii
 import hashlib
 import io
 import zipfile
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any
@@ -17,7 +18,7 @@ from memory_platform.auth.principal import Principal
 from memory_platform.enums import Capability
 from memory_platform.errors import AppError, ErrorCode
 from memory_platform.knowledge_tables import knowledge_jobs, source_chunks, source_versions, sources
-from memory_platform.storage import LocalStorage
+from memory_platform.storage import Storage
 from memory_platform.tables import scopes
 
 MAX_BYTES = 20 * 1024 * 1024
@@ -147,24 +148,30 @@ def enqueue_source(conn: Connection, workspace_id: UUID, version_id: UUID, versi
 def upload_source(
     engine: Engine,
     principal: Principal,
-    storage: LocalStorage,
+    storage: Storage,
     *,
     scope_id: UUID,
     title: str,
     filename: str,
-    encoded: str,
+    encoded: str | None = None,
+    content: bytes | None = None,
+    stored_version_id: UUID | None = None,
+    connection: Connection | None = None,
     source_id: UUID | None = None,
     expected_version: int | None = None,
     settings: object = None,
 ) -> dict[str, Any]:
     principal.require(scope_id, Capability.source_ingest)
-    format_name, content = decode_upload(filename, encoded)
+    format_name, content = decode_upload(
+        filename, encoded if encoded is not None else base64.b64encode(content or b"").decode()
+    )
     # Validate format/page limits before durable ingestion. Worker parses again after lease.
     parse_document(format_name, content)
-    version_id = uuid4()
-    storage.put(str(version_id), content)
+    version_id = stored_version_id or uuid4()
+    if stored_version_id is None:
+        storage.put(str(version_id), content)
     try:
-        with engine.begin() as conn:
+        with engine.begin() if connection is None else nullcontext(connection) as conn:
             from memory_platform.services.quotas import enforce_quota
 
             enforce_quota(
@@ -232,18 +239,25 @@ def upload_source(
                     byte_size=len(content),
                 )
             )
-            enqueue_source(conn, principal.workspace_id, version_id, version)
+            job_id = enqueue_source(conn, principal.workspace_id, version_id, version)
             conn.execute(
                 update(scopes).where(scopes.c.id == scope_id).values(revision=scopes.c.revision + 1)
             )
-        return {"id": source_id, "version_id": version_id, "version": version, "status": "queued"}
+        return {
+            "id": source_id,
+            "version_id": version_id,
+            "version": version,
+            "status": "queued",
+            "job_id": job_id,
+        }
     except Exception:
-        storage.delete(str(version_id))
+        if stored_version_id is None:
+            storage.delete(str(version_id))
         raise
 
 
 def delete_source(
-    engine: Engine, principal: Principal, storage: LocalStorage, source_id: UUID
+    engine: Engine, principal: Principal, storage: Storage, source_id: UUID
 ) -> dict[str, Any]:
     with engine.begin() as conn:
         row = checked_source(

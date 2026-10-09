@@ -180,3 +180,14 @@ def test_symlink_artifact_refused(backup_fixture, test_db_url, tmp_path):
     link.symlink_to(artifact)
     with disposable_database(test_db_url) as target, pytest.raises(OSError):
         restore_backup(target, tmp_path / "restored", link)
+
+
+def test_export_reads_originals_through_storage_adapter(backup_fixture, tmp_path):
+    original, artifact, counts, _version_id, _content = backup_fixture
+    directory = artifact.parent / "originals"
+    # Read from an explicit adapter even when the supplied directory is unrelated.
+    adapter = LocalStorage(directory)
+    output = tmp_path / "adapter-recovery.memorydb"
+    result = export_backup(original, tmp_path / "unused", output, KEY, storage=adapter)
+    assert result["originals"] == counts["originals"]
+    assert output.exists()

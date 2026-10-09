@@ -1,16 +1,132 @@
 """Streamable HTTP MCP uses per-request scoped credentials, never the owner's."""
 
 import asyncio
+import json
 import os
 import socket
 import subprocess
 import sys
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import httpx
+from sqlalchemy import select, update
 
 from memory_platform.config import REPO_ROOT
+from memory_platform.tables import credentials, memories
+
+
+def test_hosted_mcp_writes_and_credentials(settings, workspace, make_agent_client, engine):
+    """One API process serves REST and MCP, including its SDK lifespan."""
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    scope = str(workspace.personal_scope_id)
+    first = make_agent_client([workspace.personal_scope_id], ["memory:read", "memory:write"])
+    second = make_agent_client([workspace.personal_scope_id], ["memory:read", "memory:write"])
+    stranger = make_agent_client([], [])
+    expired = make_agent_client([workspace.personal_scope_id], ["memory:read"])
+    revoked = make_agent_client([workspace.personal_scope_id], ["memory:read"])
+    with engine.begin() as conn:
+        conn.execute(
+            update(credentials)
+            .where(credentials.c.id == expired.credential_id)
+            .values(expires_at=datetime.now(UTC) - timedelta(days=1))
+        )
+        conn.execute(
+            update(credentials)
+            .where(credentials.c.id == revoked.credential_id)
+            .values(revoked_at=datetime.now(UTC))
+        )
+    env = dict(os.environ) | {
+        "DATABASE_URL": settings.database_url,
+        "MEMORY_HMAC_KEY": settings.memory_hmac_key.get_secret_value(),
+        "MEMORY_API_URL": url,
+        "PROVIDER_DAILY_BUDGET_USD": "0",
+        "PROVIDER_API_KEY": "",
+        "REDIS_REST_URL": "",
+        "REDIS_REST_TOKEN": "",
+    }
+    process = _start("memory_platform.api.app:create_default_app", port, env)
+    try:
+        for token in [None, "mem_invalid", expired.token, revoked.token]:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            response = httpx.post(url + "/mcp", json={}, headers=headers, follow_redirects=False)
+            assert response.status_code == 401
+        marker = "hosted-agent-" + uuid.uuid4().hex
+
+        async def exercise(token, denied=False):
+            from mcp.client.session import ClientSession
+            from mcp.client.streamable_http import streamable_http_client
+
+            async with (
+                httpx.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=20) as http,
+                streamable_http_client(url + "/mcp", http_client=http) as (read, write),
+                ClientSession(read, write) as session,
+            ):
+                await session.initialize()
+                names = {tool.name for tool in (await session.list_tools()).tools}
+                assert {"memory_remember", "memory_recall", "memory_update"} <= names
+                args = {
+                    "scope_id": scope,
+                    "content": marker + token[-5:],
+                    "type": "fact",
+                    "idempotency_key": str(uuid.uuid4()),
+                }
+                created = await session.call_tool("memory_remember", args)
+                if denied:
+                    assert created.is_error
+                    return
+                assert not created.is_error, str(created)
+                body = json.loads(created.content[0].text)
+                replay = await session.call_tool("memory_remember", args)
+                assert not replay.is_error
+                replay_body = json.loads(replay.content[0].text)
+                assert replay_body["id"] == body["id"] and replay_body["replayed"]
+                fetched = await session.call_tool("memory_get", {"memory_id": body["id"]})
+                assert not fetched.is_error and args["content"] in str(fetched)
+                changed = await session.call_tool(
+                    "memory_update",
+                    {
+                        "memory_id": body["id"],
+                        "changes": {"expected_version": 1, "content": args["content"] + " updated"},
+                    },
+                )
+                assert not changed.is_error
+                conflict = await session.call_tool(
+                    "memory_update",
+                    {
+                        "memory_id": body["id"],
+                        "changes": {"expected_version": 1, "content": "stale"},
+                    },
+                )
+                assert conflict.is_error and "version_conflict" in str(conflict)
+                recall = await session.call_tool(
+                    "memory_recall", {"query": marker, "scope_ids": [scope]}
+                )
+                assert not recall.is_error and marker in str(recall)
+                deleted = await session.call_tool(
+                    "memory_forget", {"memory_id": body["id"], "expected_version": 2}
+                )
+                assert deleted.is_error
+                assert "forbidden" in str(deleted)
+
+        async def concurrent():
+            await asyncio.gather(
+                exercise(first.token), exercise(second.token), exercise(stranger.token, denied=True)
+            )
+
+        asyncio.run(concurrent())
+        with engine.connect() as conn:
+            authors = set(
+                conn.scalars(
+                    select(memories.c.created_by).where(memories.c.content.like(marker + "%"))
+                )
+            )
+            assert authors == {first.actor_id, second.actor_id}
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
 
 
 def _free_port() -> int:
@@ -142,7 +258,7 @@ def test_http_bridge_enforces_caller_credentials(settings, workspace, make_agent
 
             async def recall_denied(token: str) -> None:
                 text = await recall(token)
-                assert "Error executing tool" in text, text
+                assert "code=not_found" in text, text
 
             assert marker in asyncio.run(recall_text(reader.token))
             asyncio.run(recall_denied(stranger.token))

@@ -22,3 +22,8 @@ build/
 .superpowers/
 node_modules/
 .next/
+
+# Vercel local linkage and pulled credentials
+.vercel/
+.vercel
+.env*
