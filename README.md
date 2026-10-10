@@ -288,8 +288,8 @@ IDs are rehydrated from eligible records. Cache failures fall back to database r
 ## Owner dashboard
 
 See [dashboard setup](apps/web/README.md). Run the API separately, then start the dashboard
-with a random server-only `SESSION_SECRET` and matching `WEB_ORIGIN`. Owner sign-in uses an
-encrypted, HttpOnly, SameSite Strict cookie with a one-hour session. The bearer stays out of
+with a stable server-only `SESSION_SECRET` and matching `WEB_ORIGIN`. Owner sign-in uses an
+encrypted, HttpOnly, SameSite Strict cookie with no time expiry. The bearer stays out of
 browser responses/localStorage. Backend requests remain limited by explicit grants.
 
 The dashboard supports memory edit/forget, source upload/delete, task/checkpoint inspection,
