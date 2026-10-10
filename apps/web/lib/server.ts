@@ -19,12 +19,17 @@ export async function session() {
     return await getIronSession<{ token?: string }>(await cookies(), {
       password,
       cookieName: "memory_owner",
-      ttl: 3600,
+      // No time expiry: the seal never expires and the cookie persists
+      // (iron-session uses a very large Max-Age when ttl is 0). The owner
+      // credential is still validated against the backend on every request,
+      // so revoking it or rotating SESSION_SECRET ends the session.
+      ttl: 0,
       cookieOptions: {
         httpOnly: true,
         secure: origin.protocol === "https:",
         sameSite: "strict",
         path: "/",
+        maxAge: 2147483647,
       },
     });
   } catch (failure) {
