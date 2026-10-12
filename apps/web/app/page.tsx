@@ -11,6 +11,7 @@ import SourceReplacement from "@/components/source-version";
 import Icon, { type IconName } from "@/components/icon";
 import { useConfirm } from "@/components/confirmation";
 import RecordDetails from "@/components/record-details";
+import { apiUrl } from "@/lib/agent-setup.mjs";
 import "@xyflow/react/dist/style.css";
 
 type Scope = { id: string; name: string; kind: string; capabilities: string[] };
@@ -114,7 +115,7 @@ export default function Dashboard() {
   }, []);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [initializing, setInitializing] = useState(true);
-  const [token, setToken] = useState("");
+  const [githubEnabled, setGithubEnabled] = useState(false);
   const [tab, setTab] = useState<Tab>("Memories");
   const [scope, setScope] = useState("");
   const [items, setItems] = useState<Item[]>([]);
@@ -148,7 +149,15 @@ export default function Dashboard() {
   }, []);
   useEffect(() => {
     void authenticate();
+    void fetch(`${apiUrl}/oauth/config`, { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => setGithubEnabled(data?.github === true))
+      .catch(() => setGithubEnabled(false));
   }, [authenticate]);
+
+  function githubLoginUrl() {
+    return `${apiUrl}/oauth/github/login?next=${encodeURIComponent(window.location.href)}`;
+  }
 
   const load = useCallback(
     async (next?: string | null, nextOffset = 0, quiet = false) => {
@@ -271,26 +280,6 @@ export default function Dashboard() {
     };
   }, [detail?.id, detail?.kind]);
 
-  async function login(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      const response = await fetch("/api/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error?.message);
-      setToken("");
-      await authenticate();
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Sign-in failed.");
-    } finally {
-      setBusy(false);
-    }
-  }
   async function logout() {
     await fetch("/api/session", { method: "DELETE" });
     loadController.current?.abort();
@@ -451,23 +440,16 @@ export default function Dashboard() {
               {error}
             </p>
           )}
-          <form onSubmit={login}>
-            <label>
-              Owner credential
-              <input
-                type="password"
-                autoComplete="off"
-                value={token}
-                onChange={(event) => setToken(event.target.value)}
-                required
-                placeholder="Paste your owner credential"
-              />
-            </label>
-            <button disabled={busy}>
-              {busy ? "Checking…" : "Open workspace"}
+          {githubEnabled ? (
+            <button disabled={busy} onClick={() => (window.location.href = githubLoginUrl())}>
+              Continue with GitHub
               <Icon name="arrow" />
             </button>
-          </form>
+          ) : (
+            <p className="alert" role="alert">
+              GitHub sign-in is unavailable. Please check the server configuration.
+            </p>
+          )}
           <p className="subtle">
             <span className="status-dot" /> Private access · encrypted session ·
             no browser token storage

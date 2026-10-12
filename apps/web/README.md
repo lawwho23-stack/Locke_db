@@ -16,7 +16,7 @@ openssl rand -hex 32
 Put that value in `.env.local` as `SESSION_SECRET` and keep it. Generating a
 new secret logs out every session. Do not commit it.
 
-Open `http://127.0.0.1:3000`. Sign in with an owner admin bearer credential that has explicit grants on the scopes you want to inspect. The bearer is sealed in an encrypted HttpOnly, SameSite Strict cookie; it is never returned to client code or stored in localStorage.
+Open `http://127.0.0.1:3000`. Sign in with the configured GitHub owner account. The short-lived owner credential is sealed in an encrypted HttpOnly, SameSite Strict cookie; it is never returned to client code or stored in localStorage.
 
 Server-only configuration:
 
