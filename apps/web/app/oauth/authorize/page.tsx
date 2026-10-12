@@ -22,7 +22,7 @@ function AuthorizeInner() {
     void fetch("/api/session", { cache: "no-store" })
       .then((r) => setSignedIn(r.ok))
       .catch(() => setSignedIn(false));
-    void fetch(`${apiUrl}/oauth/config`, { cache: "no-store" })
+    void fetch("/api/oauth/config", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data && data.github === true) setGithubEnabled(true);
