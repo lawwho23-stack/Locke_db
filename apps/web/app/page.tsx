@@ -149,7 +149,7 @@ export default function Dashboard() {
   }, []);
   useEffect(() => {
     void authenticate();
-    void fetch(`${apiUrl}/oauth/config`, { cache: "no-store" })
+    void fetch("/api/oauth/config", { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => setGithubEnabled(data?.github === true))
       .catch(() => setGithubEnabled(false));
