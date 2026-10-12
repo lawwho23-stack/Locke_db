@@ -7,7 +7,6 @@ import { apiUrl } from "@/lib/agent-setup.mjs";
 function AuthorizeInner() {
   const params = useSearchParams();
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
-  const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [githubEnabled, setGithubEnabled] = useState(false);
@@ -33,26 +32,6 @@ function AuthorizeInner() {
 
   function githubLoginUrl() {
     return `${apiUrl}/oauth/github/login?next=${encodeURIComponent(window.location.href)}`;
-  }
-
-  async function login() {
-    setBusy(true);
-    setError("");
-    try {
-      const r = await fetch("/api/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error?.message ?? "Sign-in failed.");
-      setToken("");
-      setSignedIn(true);
-    } catch (f) {
-      setError(f instanceof Error ? f.message : "Sign-in failed.");
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function approve() {
@@ -122,19 +101,11 @@ function AuthorizeInner() {
                 Continue with GitHub
               </button>
             )}
-            <label>
-              Owner credential
-              <input
-                type="password"
-                autoComplete="off"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder="Paste your owner credential"
-              />
-            </label>
-            <button disabled={busy || !token} onClick={login}>
-              {busy ? "Checking…" : "Sign in as owner"}
-            </button>
+            {!githubEnabled && (
+              <p className="alert" role="alert">
+                GitHub sign-in is unavailable. Please check the server configuration.
+              </p>
+            )}
           </>
         )}
         {signedIn === true && (
