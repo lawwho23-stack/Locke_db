@@ -108,6 +108,9 @@ def test_real_owner_cookie_and_proxy(test_db_url, workspace, make_agent_client, 
             parsed.load(cookie)
             assert parsed["memory_owner"]["httponly"]
             assert parsed["memory_owner"]["samesite"].lower() == "strict"
+            # Owner sessions have no time expiry: the cookie must persist
+            # across refresh, tab close, and browser restart.
+            assert int(parsed["memory_owner"]["max-age"]) > 3600
             assert workspace.owner_token not in cookie and workspace.owner_token not in owner.text
             summary = client.get("/api/proxy/dashboard/summary")
             assert summary.status_code == 200
